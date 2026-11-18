@@ -1,0 +1,155 @@
+
+name: Build, Publish and Deploy Portfolio
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image version to build and deploy
+        required: true
+        type: string
+        default: "1.1.0"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout portfolio source code
+        uses: actions/checkout@v4
+
+      - name: Validate image version
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if [[ ! "$IMAGE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid image tag. Use semantic versioning, for example 1.1.0."
+            exit 1
+          fi
+
+          echo "Building portfolio version: $IMAGE_TAG"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push versioned image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            fatmadhouib/fatma-devops-portfolio:${{ inputs.image_tag }}
+            fatmadhouib/fatma-devops-portfolio:latest
+
+  deploy:
+    name: Deploy Portfolio on Windows
+    needs: build-and-push
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout portfolio repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          docker version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Engine is unavailable."
+          }
+
+          docker compose version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Compose is unavailable."
+          }
+
+      - name: Pull newly published Docker image
+        shell: pwsh
+        env:
+          PORTFOLIO_IMAGE: fatmadhouib/fatma-devops-portfolio:${{ inputs.image_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          docker compose -p fatma-portfolio -f docker-compose.yml pull portfolio
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to pull the published Docker image."
+          }
+
+      - name: Deploy updated portfolio
+        shell: pwsh
+        env:
+          PORTFOLIO_IMAGE: fatmadhouib/fatma-devops-portfolio:${{ inputs.image_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          docker compose -p fatma-portfolio -f docker-compose.yml up -d --no-build
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Compose deployment failed."
+          }
+
+          docker compose -p fatma-portfolio -f docker-compose.yml ps
+
+      - name: Verify container health and HTTP response
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $deadline = (Get-Date).AddMinutes(3)
+          $healthy = $false
+
+          Write-Host "Waiting for the portfolio container to become healthy..."
+
+          do {
+            $health = (
+              docker inspect --format '{{.State.Health.Status}}' fatma-devops-portfolio 2>$null |
+              Out-String
+            ).Trim()
+
+            Write-Host "Container health: $health"
+
+            if ($health -eq "healthy") {
+              try {
+                $response = Invoke-WebRequest `
+                  -Uri "http://localhost:3000" `
+                  -UseBasicParsing `
+                  -TimeoutSec 10
+
+                if ($response.StatusCode -eq 200) {
+                  $healthy = $true
+                  break
+                }
+              }
+              catch {
+                Write-Host "HTTP endpoint is not ready yet."
+              }
+            }
+
+            Start-Sleep -Seconds 5
+          }
+          while ((Get-Date) -lt $deadline)
+
+          if (-not $healthy) {
+            docker compose -p fatma-portfolio -f docker-compose.yml logs --tail 100
+            throw "Portfolio deployment failed its health checks."
+          }
+
+          Write-Host "Portfolio release deployed successfully."
+          Write-Host "Docker image: fatmadhouib/fatma-devops-portfolio:${{ inputs.image_tag }}"
+          Write-Host "Application URL: http://localhost:3000"
