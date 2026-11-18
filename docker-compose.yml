@@ -2,10 +2,7 @@
 services:
   portfolio:
     container_name: fatma-devops-portfolio
-    image: fatma-devops-portfolio:${IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${PORTFOLIO_IMAGE:-fatmadhouib/fatma-devops-portfolio:latest}
     ports:
       - "3000:3000"
     restart: unless-stopped
