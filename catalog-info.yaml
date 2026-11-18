@@ -1,0 +1,17 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+
+metadata:
+  name: "fatma-devops-portfolio"
+  title: "fatma-devops-portfolio"
+  description: "Personal DevOps and Cloud Engineering Portfolio built with Next.js"
+  tags:
+    - nextjs
+    - portfolio
+    - typescript
+    - docker
+
+spec:
+  type: website
+  lifecycle: experimental
+  owner: "user:default/fatma"
